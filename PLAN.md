@@ -32,6 +32,9 @@ Build a new FastAPI service in `story-labeling-api/`, next to `data-ingestion/`,
 }
 ```
 
+- For every non-noise cluster, define the centroid as the median value in each original embedding dimension across all points in that cluster.
+- Save each centroid as a separate deterministic Qdrant point with id `centroid:hdbscan:<cluster_id>`, vector equal to the median centroid, and payload containing `is_centroid: true`, `cluster_id`, `theme`, and `description`.
+- Ignore existing centroid points while loading points for clustering, then replace all existing centroid points on each run so they reflect the latest full collection.
 - If LLM labeling fails for a cluster, still write the numeric cluster id with fallback theme `"Cluster <id>"`.
 
 ## API Response

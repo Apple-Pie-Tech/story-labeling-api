@@ -1,6 +1,6 @@
 # Apple Pie Story Labeling API
 
-Minimal API that clusters Qdrant story chunk embeddings with HDBSCAN, labels each cluster with Azure OpenAI, and writes the label metadata back to Qdrant.
+Minimal API that clusters Qdrant story chunk embeddings with HDBSCAN, labels each cluster with Azure OpenAI, computes each non-noise cluster centroid as the per-dimension median vector, and writes the metadata back to Qdrant.
 
 ## Endpoints
 

@@ -6,13 +6,14 @@ from app.clustering import ClusterAssignments
 from app.config import Settings
 from app.labeling import ClusterTheme
 from app.service import ClusterLabelingService
-from app.vector_store import LoadedPoints, StoryPoint
+from app.vector_store import CentroidPoint, LoadedPoints, StoryPoint
 
 
 class FakeStore:
     def __init__(self, points: list[StoryPoint]) -> None:
         self.points = points
         self.updates: dict[str | int, dict[str, object]] | None = None
+        self.centroids: list[CentroidPoint] | None = None
 
     async def load_points(self) -> LoadedPoints:
         return LoadedPoints(points_read=len(self.points), valid_points=self.points)
@@ -23,6 +24,10 @@ class FakeStore:
     ) -> int:
         self.updates = updates
         return len(updates)
+
+    async def replace_centroid_points(self, centroids: list[CentroidPoint]) -> int:
+        self.centroids = centroids
+        return len(centroids)
 
     async def aclose(self) -> None:
         return None
@@ -73,7 +78,7 @@ async def test_service_writes_cluster_theme_and_noise_payloads() -> None:
     assert result.points_clustered == 4
     assert result.clusters_found == 2
     assert result.noise_points == 1
-    assert result.points_updated == 4
+    assert result.points_updated == 6
 
     assert store.updates is not None
     assert store.updates["a"] == {
@@ -100,3 +105,32 @@ async def test_service_writes_cluster_theme_and_noise_payloads() -> None:
         "description": None,
         "is_noise": True,
     }
+
+    assert store.centroids == [
+        CentroidPoint(
+            point_id="centroid:hdbscan:0",
+            vector=[0.15000000596046448, 0.25],
+            payload={
+                "is_centroid": True,
+                "algorithm": "hdbscan",
+                "scope": "full_collection_original_embedding_space",
+                "cluster_id": 0,
+                "theme": "Kitchen Stories",
+                "description": "Memories around food.",
+                "is_noise": False,
+            },
+        ),
+        CentroidPoint(
+            point_id="centroid:hdbscan:1",
+            vector=[9.0, 9.100000381469727],
+            payload={
+                "is_centroid": True,
+                "algorithm": "hdbscan",
+                "scope": "full_collection_original_embedding_space",
+                "cluster_id": 1,
+                "theme": "Cluster 1",
+                "description": None,
+                "is_noise": False,
+            },
+        ),
+    ]

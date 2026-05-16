@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Protocol
+
+import numpy as np
 
 from app.clustering import ClusterAssignments, HdbscanClusterer
 from app.config import Settings
 from app.labeling import AzureClusterLabeler, ClusterTheme
 from app.schemas import ClusterLabelResult
-from app.vector_store import LoadedPoints, QdrantStoryStore, StoryPoint
+from app.vector_store import CentroidPoint, LoadedPoints, QdrantStoryStore, StoryPoint
 
 
 class Clusterer(Protocol):
@@ -26,7 +29,15 @@ class StoryStore(Protocol):
         updates: dict[str | int, dict[str, object]],
     ) -> int: ...
 
+    async def replace_centroid_points(self, centroids: list[CentroidPoint]) -> int: ...
+
     async def aclose(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class ClusterWriteSet:
+    point_updates: dict[str | int, dict[str, object]]
+    centroid_points: list[CentroidPoint]
 
 
 class ClusterLabelingService:
@@ -54,8 +65,11 @@ class ClusterLabelingService:
     async def run(self) -> ClusterLabelResult:
         loaded = await self._store.load_points()
         assignments = self._clusterer.cluster(loaded.valid_points)
-        updates = await self._build_updates(loaded.valid_points, assignments.labels)
-        points_updated = await self._store.save_clustering_payloads(updates)
+        write_set = await self._build_write_set(loaded.valid_points, assignments.labels)
+        points_updated = await self._store.save_clustering_payloads(write_set.point_updates)
+        centroids_updated = await self._store.replace_centroid_points(
+            write_set.centroid_points
+        )
 
         return ClusterLabelResult(
             status="completed",
@@ -63,14 +77,14 @@ class ClusterLabelingService:
             points_clustered=len(loaded.valid_points),
             clusters_found=assignments.clusters_found,
             noise_points=assignments.noise_points,
-            points_updated=points_updated,
+            points_updated=points_updated + centroids_updated,
         )
 
-    async def _build_updates(
+    async def _build_write_set(
         self,
         points: list[StoryPoint],
         labels: list[int],
-    ) -> dict[str | int, dict[str, object]]:
+    ) -> ClusterWriteSet:
         if len(points) != len(labels):
             raise RuntimeError("point and cluster label count mismatch")
 
@@ -89,6 +103,11 @@ class ClusterLabelingService:
                     description=None,
                 )
 
+        centroids = {
+            cluster_id: _median_centroid(cluster_points)
+            for cluster_id, cluster_points in points_by_cluster.items()
+        }
+
         updates: dict[str | int, dict[str, object]] = {}
         for point, label in zip(points, labels, strict=True):
             if label == -1:
@@ -105,7 +124,12 @@ class ClusterLabelingService:
                 "is_noise": False,
             }
 
-        return updates
+        centroid_points = [
+            _centroid_point(cluster_id, centroids[cluster_id], themes[cluster_id])
+            for cluster_id in sorted(points_by_cluster)
+        ]
+
+        return ClusterWriteSet(point_updates=updates, centroid_points=centroid_points)
 
 
 def _noise_payload() -> dict[str, object]:
@@ -118,3 +142,27 @@ def _noise_payload() -> dict[str, object]:
         "is_noise": True,
     }
 
+
+def _median_centroid(points: list[StoryPoint]) -> list[float]:
+    matrix = np.array([point.vector for point in points], dtype=np.float32)
+    return [float(value) for value in np.median(matrix, axis=0)]
+
+
+def _centroid_point(
+    cluster_id: int,
+    vector: list[float],
+    theme: ClusterTheme,
+) -> CentroidPoint:
+    return CentroidPoint(
+        point_id=f"centroid:hdbscan:{cluster_id}",
+        vector=vector,
+        payload={
+            "is_centroid": True,
+            "algorithm": "hdbscan",
+            "scope": "full_collection_original_embedding_space",
+            "cluster_id": cluster_id,
+            "theme": theme.theme,
+            "description": theme.description,
+            "is_noise": False,
+        },
+    )

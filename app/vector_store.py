@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models as qdrant_models
 
 from app.config import Settings
 
@@ -27,6 +28,13 @@ class LoadedPoints:
     valid_points: list[StoryPoint]
 
 
+@dataclass(frozen=True)
+class CentroidPoint:
+    point_id: str
+    vector: list[float]
+    payload: dict[str, object]
+
+
 @runtime_checkable
 class QdrantPointsAPI(Protocol):
     async def scroll(
@@ -46,6 +54,24 @@ class QdrantPointsAPI(Protocol):
         *,
         payload: dict[str, object],
         points: list[str | int],
+        wait: bool = True,
+        **kwargs: object,
+    ) -> object: ...
+
+    async def delete(
+        self,
+        collection_name: str,
+        *,
+        points_selector: object,
+        wait: bool = True,
+        **kwargs: object,
+    ) -> object: ...
+
+    async def upsert(
+        self,
+        collection_name: str,
+        *,
+        points: list[qdrant_models.PointStruct],
         wait: bool = True,
         **kwargs: object,
     ) -> object: ...
@@ -122,6 +148,40 @@ class QdrantStoryStore:
 
         return updated
 
+    async def replace_centroid_points(self, centroids: list[CentroidPoint]) -> int:
+        await self._client.delete(
+            collection_name=self._collection_name,
+            points_selector=qdrant_models.FilterSelector(
+                filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="is_centroid",
+                            match=qdrant_models.MatchValue(value=True),
+                        )
+                    ]
+                )
+            ),
+            wait=True,
+        )
+
+        if not centroids:
+            return 0
+
+        points = [
+            qdrant_models.PointStruct(
+                id=centroid.point_id,
+                vector=centroid.vector,
+                payload=centroid.payload,
+            )
+            for centroid in centroids
+        ]
+        await self._client.upsert(
+            collection_name=self._collection_name,
+            points=points,
+            wait=True,
+        )
+        return len(points)
+
 
 def _story_point_from_record(record: object) -> StoryPoint | None:
     point_id = getattr(record, "id", None)
@@ -129,6 +189,9 @@ def _story_point_from_record(record: object) -> StoryPoint | None:
     payload = getattr(record, "payload", None)
 
     if point_id is None or not isinstance(payload, dict):
+        return None
+
+    if payload.get("is_centroid") is True:
         return None
 
     if isinstance(vector, dict):
