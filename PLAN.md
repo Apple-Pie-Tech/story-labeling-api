@@ -48,9 +48,11 @@ Build a new FastAPI service in `story-labeling-api/`, next to `data-ingestion/`,
   "points_clustered": 120,
   "clusters_found": 5,
   "noise_points": 8,
-  "points_updated": 120
+  "points_updated": 125
 }
 ```
+
+`points_updated` counts both the clustering payload updates written onto existing points and any centroid points re-upserted during the same run.
 
 ## Test Plan
 
