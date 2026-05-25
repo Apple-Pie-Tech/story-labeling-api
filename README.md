@@ -32,6 +32,12 @@ uv run --python 3.12 --with-editable . --with pytest --with pytest-asyncio --wit
 uv run uvicorn app.main:app --reload --port 8001
 ```
 
+For the stable local route-contract check used by CI parity, run:
+
+```bash
+PYTHONPATH=. uv run pytest tests/test_main.py -q
+```
+
 Run a labeling job:
 
 ```bash
