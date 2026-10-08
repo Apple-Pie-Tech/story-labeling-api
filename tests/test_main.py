@@ -33,7 +33,7 @@ class FailingLabelingService:
 
 class FailingVectorStoreService:
     async def run(self) -> ClusterLabelResult:
-        raise VectorStoreError("qdrant unavailable")
+        raise VectorStoreError("S3 Vectors list_vectors failed")
 
 
 class FailingUnexpectedService:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -11,7 +12,14 @@ from app.clustering import ClusterAssignments, HdbscanClusterer
 from app.config import Settings
 from app.labeling import BedrockClusterLabeler, ClusterTheme
 from app.schemas import ClusterLabelResult
-from app.vector_store import CentroidPoint, LoadedPoints, QdrantStoryStore, StoryPoint
+from app.vector_store import (
+    CentroidPoint,
+    LoadedPoints,
+    PointClusteringUpdate,
+    S3VectorsStoryStore,
+    StoryPoint,
+    clustering_metadata,
+)
 
 
 class Clusterer(Protocol):
@@ -27,17 +35,22 @@ class StoryStore(Protocol):
 
     async def save_clustering_payloads(
         self,
-        updates: dict[str | int, dict[str, object]],
+        updates: Sequence[PointClusteringUpdate],
     ) -> int: ...
 
-    async def replace_centroid_points(self, centroids: list[CentroidPoint]) -> int: ...
+    async def replace_centroid_points(
+        self,
+        centroids: Sequence[CentroidPoint],
+        *,
+        existing_centroid_keys: Sequence[str] = (),
+    ) -> int: ...
 
     async def aclose(self) -> None: ...
 
 
 @dataclass(frozen=True)
 class ClusterWriteSet:
-    point_updates: dict[str | int, dict[str, object]]
+    point_updates: list[PointClusteringUpdate]
     centroid_points: list[CentroidPoint]
 
 
@@ -50,7 +63,7 @@ class ClusterLabelingService:
         clusterer: Clusterer | None = None,
         labeler: Labeler | None = None,
     ) -> None:
-        self._store = store or QdrantStoryStore(settings)
+        self._store = store or S3VectorsStoryStore(settings)
         self._clusterer = clusterer or HdbscanClusterer(settings)
         self._labeler = labeler or BedrockClusterLabeler(settings)
 
@@ -69,7 +82,8 @@ class ClusterLabelingService:
         write_set = await self._build_write_set(loaded.valid_points, assignments.labels)
         points_updated = await self._store.save_clustering_payloads(write_set.point_updates)
         centroids_updated = await self._store.replace_centroid_points(
-            write_set.centroid_points
+            write_set.centroid_points,
+            existing_centroid_keys=loaded.centroid_keys,
         )
 
         return ClusterLabelResult(
@@ -109,21 +123,28 @@ class ClusterLabelingService:
             for cluster_id, cluster_points in points_by_cluster.items()
         }
 
-        updates: dict[str | int, dict[str, object]] = {}
+        updates: list[PointClusteringUpdate] = []
         for point, label in zip(points, labels, strict=True):
             if label == -1:
-                updates[point.point_id] = _noise_payload()
+                updates.append(
+                    PointClusteringUpdate(point=point, clustering=_noise_payload())
+                )
                 continue
 
             theme = themes[label]
-            updates[point.point_id] = {
-                "algorithm": "hdbscan",
-                "scope": "full_collection_original_embedding_space",
-                "cluster_id": label,
-                "theme": theme.theme,
-                "description": theme.description,
-                "is_noise": False,
-            }
+            updates.append(
+                PointClusteringUpdate(
+                    point=point,
+                    clustering={
+                        "algorithm": "hdbscan",
+                        "scope": "full_collection_original_embedding_space",
+                        "cluster_id": label,
+                        "theme": theme.theme,
+                        "description": theme.description,
+                        "is_noise": False,
+                    },
+                )
+            )
 
         centroid_points = [
             _centroid_point(cluster_id, centroids[cluster_id], themes[cluster_id])
@@ -154,29 +175,31 @@ def _centroid_point(
     vector: list[float],
     theme: ClusterTheme,
 ) -> CentroidPoint:
-    # Qdrant accepts only an unsigned integer or a UUID as a point ID, so the
-    # readable key is hashed into a deterministic UUID5 (the same convention
-    # data-ingestion uses for chunk IDs) and kept verbatim in the payload.
+    # S3 Vectors keys are plain strings, so the UUID5 is no longer forced by the
+    # backend as it was by Qdrant (E49). It is kept because it is the identity
+    # contract: the same cluster must land on the same key across runs so a
+    # centroid is replaced rather than duplicated. The readable key stays in the
+    # payload.
     centroid_key = f"centroid:hdbscan:{cluster_id}"
     return CentroidPoint(
         point_id=str(uuid.uuid5(uuid.NAMESPACE_URL, centroid_key)),
         vector=vector,
         payload={
-            # Stays top-level, not nested under "clustering": this is the key
-            # data-provision-api's reader checks (unconditionally, at the top
-            # level) to mark a point as central, and it is also what
-            # `_story_point_from_record` below uses to keep centroids out of
-            # the next clustering run. Everything else converges under
-            # "clustering" so ordinary and centroid points share one shape.
+            # Unprefixed, unlike every other clustering key: this is what
+            # data-provision-api's reader checks to mark a point as central, and
+            # what the next run's read pass uses to keep centroids out of
+            # clustering and to find stale ones to delete.
             "is_centroid": True,
-            "clustering": {
-                "algorithm": "hdbscan",
-                "scope": "full_collection_original_embedding_space",
-                "centroid_key": centroid_key,
-                "cluster_id": cluster_id,
-                "theme": theme.theme,
-                "description": theme.description,
-                "is_noise": False,
-            },
+            **clustering_metadata(
+                {
+                    "algorithm": "hdbscan",
+                    "scope": "full_collection_original_embedding_space",
+                    "centroid_key": centroid_key,
+                    "cluster_id": cluster_id,
+                    "theme": theme.theme,
+                    "description": theme.description,
+                    "is_noise": False,
+                }
+            ),
         },
     )

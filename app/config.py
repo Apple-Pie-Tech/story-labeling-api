@@ -7,11 +7,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    qdrant_url: str = "http://qdrant:6333"
-    qdrant_api_key: str | None = None
-    qdrant_collection: str = "apple_pie_story_chunks"
-    qdrant_scroll_batch_size: int = 256
-    qdrant_update_batch_size: int = 64
+    # S3 Vectors bucket and index, both created by Terraform. The index pins the
+    # dimension and the non-filterable metadata keys at creation time.
+    s3_vector_bucket: str | None = None
+    s3_vector_index: str = "apple-pie-story-chunks"
+    # Capped by the service at its own limits: ListVectors returns at most 1000
+    # per page, PutVectors accepts at most 500 per call.
+    vector_list_batch_size: int = 500
+    vector_put_batch_size: int = 500
 
     hdbscan_min_cluster_size: int = 10
     # None tells hdbscan to fall back to its own default (min_cluster_size).
