@@ -1,3 +1,5 @@
+import logging
+
 from fastapi.testclient import TestClient
 
 from app.clustering import ClusteringError
@@ -66,6 +68,27 @@ def test_cluster_labels_returns_expected_contract() -> None:
         "noise_points": 1,
         "points_updated": 6,
     }
+
+
+def test_cluster_labels_logs_ingest_trigger_headers(caplog) -> None:
+    app.dependency_overrides[get_cluster_labeling_service] = lambda: FakeClusterLabelingService()
+    client = TestClient(app)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            response = client.post(
+                "/cluster-labels",
+                headers={
+                    "x-ingest-input-id": "input-123",
+                    "x-ingest-source": "pdf-parser",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "input-123" in caplog.text
+    assert "pdf-parser" in caplog.text
 
 
 def test_cluster_labels_maps_clustering_errors_to_400() -> None:

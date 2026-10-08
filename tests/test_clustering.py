@@ -16,6 +16,22 @@ def test_cluster_raises_when_too_few_points() -> None:
         clusterer.cluster(points)
 
 
+def test_cluster_error_names_counts_and_setting() -> None:
+    clusterer = HdbscanClusterer(Settings(hdbscan_min_cluster_size=3))
+    points = [
+        StoryPoint(point_id="1", vector=[0.1, 0.2], text="one", payload={}),
+        StoryPoint(point_id="2", vector=[0.2, 0.3], text="two", payload={}),
+    ]
+
+    with pytest.raises(ClusteringError) as exc_info:
+        clusterer.cluster(points)
+
+    message = str(exc_info.value)
+    assert "got 2" in message
+    assert "need at least 3" in message
+    assert "HDBSCAN_MIN_CLUSTER_SIZE" in message
+
+
 def test_cluster_raises_on_mixed_dimensions() -> None:
     clusterer = HdbscanClusterer(Settings(hdbscan_min_cluster_size=2))
     points = [

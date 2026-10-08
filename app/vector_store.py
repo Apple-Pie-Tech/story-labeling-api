@@ -89,7 +89,11 @@ class QdrantStoryStore:
         self._update_batch_size = settings.qdrant_update_batch_size
         self._client: QdrantPointsAPI | AsyncQdrantClient = client or AsyncQdrantClient(
             url=settings.qdrant_url,
-            api_key=settings.qdrant_api_key,
+            # A blank string (e.g. `QDRANT_API_KEY=` in .env) is not a real
+            # key; forwarding it makes qdrant-client warn "Api key is used
+            # with an insecure connection" on every startup. Treat it as
+            # absent, same as None.
+            api_key=settings.qdrant_api_key or None,
         )
         self._owns_client = client is None
 

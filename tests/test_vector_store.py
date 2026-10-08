@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.vector_store as vector_store_module
 from app.config import Settings
 from app.vector_store import QdrantStoryStore
 
@@ -153,3 +154,52 @@ async def test_replace_centroid_points_deletes_old_centroids_and_upserts_new_one
         "theme": "Kitchen Stories",
         "description": "Food memories.",
     }
+
+
+def test_blank_qdrant_api_key_is_passed_as_none(monkeypatch) -> None:
+    """An empty QDRANT_API_KEY (e.g. `KEY=` in .env) must not be forwarded as-is.
+
+    qdrant-client treats any non-None api_key as "present" and warns
+    'Api key is used with an insecure connection' on every startup, even
+    though an empty string authenticates nothing. It must be normalized to
+    None so the client treats the key as absent.
+    """
+    captured: dict[str, object] = {}
+
+    class FakeAsyncQdrantClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(vector_store_module, "AsyncQdrantClient", FakeAsyncQdrantClient)
+
+    QdrantStoryStore(make_settings().model_copy(update={"qdrant_api_key": ""}))
+
+    assert captured["api_key"] is None
+
+
+def test_none_qdrant_api_key_is_passed_as_none(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAsyncQdrantClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(vector_store_module, "AsyncQdrantClient", FakeAsyncQdrantClient)
+
+    QdrantStoryStore(make_settings().model_copy(update={"qdrant_api_key": None}))
+
+    assert captured["api_key"] is None
+
+
+def test_real_qdrant_api_key_is_passed_through(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAsyncQdrantClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(vector_store_module, "AsyncQdrantClient", FakeAsyncQdrantClient)
+
+    QdrantStoryStore(make_settings().model_copy(update={"qdrant_api_key": "real-key"}))
+
+    assert captured["api_key"] == "real-key"

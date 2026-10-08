@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Protocol
@@ -8,7 +9,7 @@ import numpy as np
 
 from app.clustering import ClusterAssignments, HdbscanClusterer
 from app.config import Settings
-from app.labeling import AzureClusterLabeler, ClusterTheme
+from app.labeling import BedrockClusterLabeler, ClusterTheme
 from app.schemas import ClusterLabelResult
 from app.vector_store import CentroidPoint, LoadedPoints, QdrantStoryStore, StoryPoint
 
@@ -51,7 +52,7 @@ class ClusterLabelingService:
     ) -> None:
         self._store = store or QdrantStoryStore(settings)
         self._clusterer = clusterer or HdbscanClusterer(settings)
-        self._labeler = labeler or AzureClusterLabeler(settings)
+        self._labeler = labeler or BedrockClusterLabeler(settings)
 
     async def aclose(self) -> None:
         close_store = getattr(self._store, "aclose", None)
@@ -153,16 +154,29 @@ def _centroid_point(
     vector: list[float],
     theme: ClusterTheme,
 ) -> CentroidPoint:
+    # Qdrant accepts only an unsigned integer or a UUID as a point ID, so the
+    # readable key is hashed into a deterministic UUID5 (the same convention
+    # data-ingestion uses for chunk IDs) and kept verbatim in the payload.
+    centroid_key = f"centroid:hdbscan:{cluster_id}"
     return CentroidPoint(
-        point_id=f"centroid:hdbscan:{cluster_id}",
+        point_id=str(uuid.uuid5(uuid.NAMESPACE_URL, centroid_key)),
         vector=vector,
         payload={
+            # Stays top-level, not nested under "clustering": this is the key
+            # data-provision-api's reader checks (unconditionally, at the top
+            # level) to mark a point as central, and it is also what
+            # `_story_point_from_record` below uses to keep centroids out of
+            # the next clustering run. Everything else converges under
+            # "clustering" so ordinary and centroid points share one shape.
             "is_centroid": True,
-            "algorithm": "hdbscan",
-            "scope": "full_collection_original_embedding_space",
-            "cluster_id": cluster_id,
-            "theme": theme.theme,
-            "description": theme.description,
-            "is_noise": False,
+            "clustering": {
+                "algorithm": "hdbscan",
+                "scope": "full_collection_original_embedding_space",
+                "centroid_key": centroid_key,
+                "cluster_id": cluster_id,
+                "theme": theme.theme,
+                "description": theme.description,
+                "is_noise": False,
+            },
         },
     )

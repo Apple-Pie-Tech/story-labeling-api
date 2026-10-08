@@ -28,7 +28,8 @@ class HdbscanClusterer:
         if len(points) < self._min_cluster_size:
             raise ClusteringError(
                 "not enough points to cluster: "
-                f"need at least {self._min_cluster_size}, got {len(points)}"
+                f"need at least {self._min_cluster_size}, got {len(points)} "
+                "(tune this via the HDBSCAN_MIN_CLUSTER_SIZE setting)"
             )
 
         dimensions = {len(point.vector) for point in points}

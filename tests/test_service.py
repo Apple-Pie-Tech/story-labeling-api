@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass
 
 import pytest
@@ -106,31 +107,73 @@ async def test_service_writes_cluster_theme_and_noise_payloads() -> None:
         "is_noise": True,
     }
 
+    # is_centroid stays top-level: data-provision-api's `_extract_label` reads
+    # it there (never inside `clustering`) to set `is_central`, and this
+    # service's own `_story_point_from_record` filters on the same top-level
+    # key to keep centroids out of the next clustering run. Every other key
+    # converges under `clustering`, matching the shape ordinary points get.
     assert store.centroids == [
         CentroidPoint(
-            point_id="centroid:hdbscan:0",
+            point_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "centroid:hdbscan:0")),
             vector=[0.15000000596046448, 0.25],
             payload={
                 "is_centroid": True,
-                "algorithm": "hdbscan",
-                "scope": "full_collection_original_embedding_space",
-                "cluster_id": 0,
-                "theme": "Kitchen Stories",
-                "description": "Memories around food.",
-                "is_noise": False,
+                "clustering": {
+                    "algorithm": "hdbscan",
+                    "scope": "full_collection_original_embedding_space",
+                    "centroid_key": "centroid:hdbscan:0",
+                    "cluster_id": 0,
+                    "theme": "Kitchen Stories",
+                    "description": "Memories around food.",
+                    "is_noise": False,
+                },
             },
         ),
         CentroidPoint(
-            point_id="centroid:hdbscan:1",
+            point_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "centroid:hdbscan:1")),
             vector=[9.0, 9.100000381469727],
             payload={
                 "is_centroid": True,
-                "algorithm": "hdbscan",
-                "scope": "full_collection_original_embedding_space",
-                "cluster_id": 1,
-                "theme": "Cluster 1",
-                "description": None,
-                "is_noise": False,
+                "clustering": {
+                    "algorithm": "hdbscan",
+                    "scope": "full_collection_original_embedding_space",
+                    "centroid_key": "centroid:hdbscan:1",
+                    "cluster_id": 1,
+                    "theme": "Cluster 1",
+                    "description": None,
+                    "is_noise": False,
+                },
             },
         ),
     ]
+
+
+def test_centroid_point_id_is_a_valid_qdrant_point_id() -> None:
+    """Qdrant only accepts an unsigned integer or a UUID as a point ID.
+
+    The previous ``f"centroid:hdbscan:{cluster_id}"`` form is neither, so every
+    real ``replace_centroid_points`` call failed with HTTP 400 and the whole
+    labeling run died. The in-memory fakes accept any string, which is why the
+    suite stayed green while the service was broken against a live Qdrant.
+    """
+    import uuid as _uuid
+
+    from app.service import _centroid_point
+
+    point = _centroid_point(
+        cluster_id=0,
+        vector=[0.0, 1.0],
+        theme=ClusterTheme(theme="Morning Rides", description=None),
+    )
+
+    # Raises ValueError if not a well-formed UUID.
+    _uuid.UUID(point.point_id)
+
+    # Stable across calls, and distinct per cluster.
+    again = _centroid_point(0, [0.0, 1.0], ClusterTheme(theme="Other", description=None))
+    other = _centroid_point(1, [0.0, 1.0], ClusterTheme(theme="Morning Rides", description=None))
+    assert point.point_id == again.point_id
+    assert point.point_id != other.point_id
+
+    # The human-readable key stays available for tracing.
+    assert point.payload["clustering"]["centroid_key"] == "centroid:hdbscan:0"
